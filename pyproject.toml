@@ -1,7 +1,7 @@
 [project]
 name = "django-identity"
 version = "0.1.0"
-description = ""
+description = "Development in progress - please come back later."
 authors = [
     {name = "Stacy Noland", email = "46572585+stacynoland@users.noreply.github.com"}
 ]
