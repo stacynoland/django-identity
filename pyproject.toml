@@ -3,7 +3,7 @@ name = "django-identity"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "Stacy Noland",email = "46572585+stacynoland@users.noreply.github.com"}
+    {name = "Stacy Noland", email = "46572585+stacynoland@users.noreply.github.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.13"
