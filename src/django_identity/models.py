@@ -10,6 +10,8 @@ from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from .validators import UnicodeUsernameValidator
+
 
 class UserManager(BaseUserManager):
     use_in_migrations = True
@@ -63,6 +65,8 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser, PermissionsMixin):
 
+    username_validator = UnicodeUsernameValidator()
+
     id = models.UUIDField(
         primary_key=True,
         default=uuid,
@@ -73,7 +77,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         max_length=254,
         unique=True,
         help_text=_("Required. 254 characters or less. May be an email address."),
-        # validators=[username_validator],
+        validators=[username_validator],
         error_messages={
             'unique': _("Please try again.")
         },
