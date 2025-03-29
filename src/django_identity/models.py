@@ -1,5 +1,6 @@
 from uuid import uuid4 as uuid
 
+from django.apps import apps
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import (
     AbstractBaseUser, BaseUserManager, PermissionsMixin)
@@ -9,8 +10,6 @@ from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-from .validators import UnicodeUsernameValidator
-
 
 class UserManager(BaseUserManager):
     use_in_migrations = True
@@ -19,19 +18,28 @@ class UserManager(BaseUserManager):
         if email:
             try:
                 validate_email(email)
-            except ValidationError:
-                raise
+            except ValidationError as e:
+                raise ValueError(f"Invalid email address: {email}.") from e
         elif username:
             try:
                 validate_email(username)
                 email = username
-            except ValidationError:
-                raise
+            except ValidationError as e:
+                raise ValueError("Username must be a valid email or \
+                                 an email must be provided.") from e
         else:
-            raise ValueError("A valid email or username must be provided.")
-        # TODO: Check if email already exists or needs to be verified
+            raise TypeError("A valid email must be provided or username must be an email.")
+        EmailModel = apps.get_model('django_identity', 'Email')
+        normalized_email = EmailModel.normalize_full_email(email)
+        if EmailModel.objects.filter(normalized_email=normalized_email).exists():
+            raise ValueError("Email already exists.")
         user = self.model(username=username, **extra_fields)
-        # TODO: Save email as primary for user after User model created
+        EmailModel.objects.create(
+            user=user,
+            email=email,
+            normalized_email=normalized_email,
+            is_primary=True,
+        )
         user.password = make_password(password)
         return user
 
@@ -55,8 +63,6 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser, PermissionsMixin):
 
-    username_validator = UnicodeUsernameValidator()
-
     id = models.UUIDField(
         primary_key=True,
         default=uuid,
@@ -67,7 +73,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         max_length=254,
         unique=True,
         help_text=_("Required. 254 characters or less. May be an email address."),
-        validators=[username_validator],
+        # validators=[username_validator],
         error_messages={
             'unique': _("Please try again.")
         },
@@ -89,7 +95,125 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     objects = UserManager()
 
+    @property
+    def email(self):
+        return self.get_primary_email()
+
+    EMAIL_FIELD = 'email'
+    USERNAME_FIELD = 'username'
+    REQUIRED_FIELDS = []
+
     class Meta:
         verbose_name = _("user")
         verbose_name_plural = _("users")
         indexes = [models.Index(fields=['username'])]
+
+    def get_primary_email(self):
+        """Get primary email address for user."""
+        try:
+            return self.emails.get(is_primary=True).email
+        except Email.DoesNotExist:
+            raise
+        except Email.MultipleObjectsReturned:
+            raise
+
+
+class Email(models.Model):
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid,
+        editable=False,
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='emails'
+    )
+    is_verified = models.BooleanField(
+        _("email verified"),
+        default=False,
+        help_text=_("Designates email address has been verified."),
+    )
+    is_primary = models.BooleanField(
+        _("primary email"),
+        default=True,
+        help_text=_("Designates email address is primary for user."),
+    )
+    _email = models.EmailField(
+        _("email address"),
+        unique=True,
+        db_column='email',
+        help_text=_(
+            "Required. Must be a valid email address."
+        ),
+        error_messages={
+            'unique': _("Please check your email for a verification link.")
+        },
+    )
+    _normalized_email = models.EmailField(
+        _("normalized email address"),
+        unique=True,
+        db_column='normalized_email',
+        help_text=_(
+            "Required. Must be a valid email address."
+        ),
+        error_messages={
+            'unique': _("Please check your email for a verification link.")
+        },
+    )
+
+    class Meta:
+        verbose_name = _("email")
+        verbose_name_plural = _("emails")
+        indexes = [models.Index(fields=['email'])]
+
+    def save(self, *args, **kwargs):
+        if self.is_primary is True:
+            if self.pk:
+                self.objects.filter(user=self.user).exclude(pk=self.pk)\
+                    .update(is_primary=False)
+            else:
+                self.objects.filter(user=self.user).update(is_primary=False)
+        return super().save(*args, **kwargs)
+
+    @property
+    def email(self):
+        return self._email
+
+    @email.setter
+    def email(self, value):
+        self._email = self.normalize_domain(value)
+
+    @property
+    def normalized_email(self):
+        return self._normalized_email
+
+    @normalized_email.setter
+    def email(self, value):
+        self._normalized_email = self.normalize_full_email(value)
+
+    @classmethod
+    def normalize_domain(cls, email):
+        """Normalize domain part by lowercasing it."""
+        email = email or ""
+        if not isinstance(email, str):
+            raise ValueError(f"value must be a string (type str): \
+                             {type(email)} not supported")
+        try:
+            prefix, domain = email.strip().rsplit("@", 1)
+        except ValueError:
+            raise
+        else:
+            email = prefix + "@" + domain.lower()
+        return email
+
+    @classmethod
+    def normalize_full_email(cls, email):
+        """Normalize email address by lowercasing it."""
+        email = email or ""
+        if not isinstance(email, str):
+            raise ValueError(f"value must be a string (type str): \
+                             {type(email)} not supported")
+        email = email.strip().lower()
+        return email
